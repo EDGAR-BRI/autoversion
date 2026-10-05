@@ -1,0 +1,22 @@
+{
+  "name": "@edgar-bri/autoversion",
+  "version": "1.0.0",
+  "description": "Auto-versionamiento semántico por Conventional Commits para cualquier proyecto Node.js",
+  "type": "module",
+  "bin": {
+    "autoversion": "./bin/index.mjs"
+  },
+  "keywords": [
+    "semver",
+    "git-hooks",
+    "conventional-commits",
+    "autoversion",
+    "dx"
+  ],
+  "author": "EDGAR-BRI",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/EDGAR-BRI/autoversion.git"
+  }
+}
