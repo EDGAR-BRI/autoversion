@@ -50,6 +50,8 @@ npx github:EDGAR-BRI/autoversion
    - Personaliza qué prefijos mueven qué versión tanto a nivel global (`~/.autoversion.json`) como por proyecto (`./.autoversion.json`).
 6. **🖥️ Compatibilidad Universal (CLI + GUIs):**
    - Funciona sin configuración adicional tanto en terminal (`git commit -m "..."`) como haciendo clic en el botón de commit de **VS Code**, **Cursor**, **GitKraken** o editores interactivos.
+7. **🎯 Respeto a Modificaciones Manuales de Versión:**
+   - Si tú o tu equipo ajustan manualmente el número de versión en `pubspec.yaml` o `package.json` antes de hacer commit, AutoVersion lo detecta automáticamente y **no la incrementa de nuevo**, respetando tu versión manual y registrando el cambio en el `CHANGELOG.md`.
 
 ---
 

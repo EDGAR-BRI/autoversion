@@ -2,11 +2,12 @@
 set -e
 
 # ==============================================================================
-# AutoVersion Setup Script v1.4.0
+# AutoVersion Setup Script v1.5.0
 # Soporte para Node.js (package.json) y Flutter / Dart (pubspec.yaml)
 # Configuración jerárquica (.autoversion.json con comentarios)
 # Modo estricto opcional ("strict": false/true)
 # Detección y bloqueo de fuga de secretos ("blockSecrets": true)
+# Respeto inteligente a versiones modificadas manualmente (CLI y GUI)
 # Generación atómica de CHANGELOG.md
 # Compatible con Terminal CLI y GUIs (VS Code, Cursor, GitKraken, etc.)
 # https://github.com/EDGAR-BRI/autoversion
@@ -380,6 +381,37 @@ function calculateNextSemVer(currentVersion, bumpType) {
   return currentVersion;
 }
 
+function getFlutterVersion() {
+  if (!fs.existsSync(PUBSPEC_PATH)) return null;
+  try {
+    const content = fs.readFileSync(PUBSPEC_PATH, "utf8");
+    const match = content.match(/^[ \t]*version:[ \t]*([^\s#]+)/m);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+function getNodeVersion() {
+  if (!fs.existsSync(PKG_PATH)) return null;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(PKG_PATH, "utf8"));
+    return pkg.version || null;
+  } catch {
+    return null;
+  }
+}
+
+function isFlutterVersionModifiedInDiff(diff) {
+  if (!diff) return false;
+  return /^\+[ \t]*version:[ \t]*[0-9]/m.test(diff);
+}
+
+function isNodeVersionModifiedInDiff(diff) {
+  if (!diff) return false;
+  return /^\+[ \t]*"version"[ \t]*:[ \t]*"[0-9]/m.test(diff);
+}
+
 function bumpFlutterPubspec(bumpType) {
   if (!fs.existsSync(PUBSPEC_PATH)) return null;
   const content = fs.readFileSync(PUBSPEC_PATH, "utf8");
@@ -453,7 +485,7 @@ function updateChangelog(newVersion, msg, bumpType, config) {
   const changelogPath = path.resolve(config.changelogFile || "CHANGELOG.md");
   const now = new Date();
   const dateStr = now.toISOString().split("T")[0];
-  const firstLine = msg.split("\n")[0].trim();
+  const firstLine = (msg || "Actualización de versión").split("\n")[0].trim();
 
   let icon = "•";
   if (bumpType === "major") icon = "💥";
@@ -511,9 +543,48 @@ function handlePreCommit() {
     process.exit(1);
   }
 
+  const hasNode = fs.existsSync(PKG_PATH);
+  const hasFlutter = fs.existsSync(PUBSPEC_PATH);
+
+  // Detectar si el usuario modificó manualmente la versión en staging
+  let flutterManual = false;
+  let nodeManual = false;
+
+  if (hasFlutter) {
+    try {
+      const diff = execSync("git diff --cached -U0 -- pubspec.yaml", { encoding: "utf8" });
+      if (isFlutterVersionModifiedInDiff(diff)) {
+        flutterManual = true;
+      }
+    } catch {}
+  }
+
+  if (hasNode) {
+    try {
+      const diff = execSync("git diff --cached -U0 -- package.json", { encoding: "utf8" });
+      if (isNodeVersionModifiedInDiff(diff)) {
+        nodeManual = true;
+      }
+    } catch {}
+  }
+
+  const manualVersion = (hasFlutter && flutterManual ? getFlutterVersion() : null) ||
+                        (hasNode && nodeManual ? getNodeVersion() : null);
+
   const cmdline = findGitCommitCmdline();
   const msg = extractCommitMessage(cmdline);
   const bumpType = getBumpType(msg, config);
+
+  if (manualVersion) {
+    if (msg) {
+      console.log(`\nℹ️  [AutoVersion] Se detectó una versión modificada manualmente (${manualVersion}). Respetando versión del desarrollador.`);
+      if (config.changelog) {
+        updateChangelog(manualVersion, msg, bumpType, config);
+      }
+      console.log("");
+    }
+    return;
+  }
 
   if (!bumpType) {
     if (msg) {
@@ -526,22 +597,6 @@ function handlePreCommit() {
       }
     }
     return;
-  }
-
-  const hasNode = fs.existsSync(PKG_PATH);
-  const hasFlutter = fs.existsSync(PUBSPEC_PATH);
-
-  if (hasFlutter) {
-    try {
-      const diff = execSync("git diff --cached pubspec.yaml", { encoding: "utf8" });
-      if (/^\+[ \t]*version:/m.test(diff)) return;
-    } catch {}
-  }
-  if (hasNode) {
-    try {
-      const diff = execSync("git diff --cached package.json", { encoding: "utf8" });
-      if (diff.includes('"version":')) return;
-    } catch {}
   }
 
   console.log(`\n🚀 [AutoVersion] Mensaje detectado (CLI): "${msg.split("\n")[0]}"`);
@@ -602,9 +657,27 @@ function handlePostCommit() {
     return;
   }
 
-  const alreadyBumped = (hasFlutter && committedFiles.includes("pubspec.yaml")) ||
-                        (hasNode && committedFiles.includes("package.json"));
-  if (alreadyBumped) return;
+  // Verificar si la línea de versión fue modificada en este commit
+  let flutterVersionChanged = false;
+  let nodeVersionChanged = false;
+
+  if (hasFlutter) {
+    try {
+      const diff = execSync("git diff-tree --no-commit-id -p -U0 -r --root HEAD -- pubspec.yaml", { encoding: "utf8" });
+      if (isFlutterVersionModifiedInDiff(diff)) {
+        flutterVersionChanged = true;
+      }
+    } catch {}
+  }
+
+  if (hasNode) {
+    try {
+      const diff = execSync("git diff-tree --no-commit-id -p -U0 -r --root HEAD -- package.json", { encoding: "utf8" });
+      if (isNodeVersionModifiedInDiff(diff)) {
+        nodeVersionChanged = true;
+      }
+    } catch {}
+  }
 
   let lastMsg = "";
   try {
@@ -614,6 +687,36 @@ function handlePostCommit() {
   }
 
   const bumpType = getBumpType(lastMsg, config);
+
+  // Si la línea de versión ya cambió en este commit:
+  if (flutterVersionChanged || nodeVersionChanged) {
+    const changelogFile = config.changelogFile || "CHANGELOG.md";
+    const changelogIncluded = committedFiles.includes(changelogFile);
+
+    // Si fue modificada manualmente (por ejemplo, desde VS Code GUI sin changelog previo),
+    // actualizar y enmendar el changelog respetando la versión manual del usuario
+    if (config.changelog && !changelogIncluded) {
+      const manualVersion = (hasFlutter && flutterVersionChanged ? getFlutterVersion() : null) ||
+                            (hasNode && nodeVersionChanged ? getNodeVersion() : null);
+      if (manualVersion) {
+        console.log(`\nℹ️  [AutoVersion] Se detectó versión modificada manualmente (${manualVersion}). Respetando versión del desarrollador.`);
+        const updated = updateChangelog(manualVersion, lastMsg, bumpType, config);
+        if (updated) {
+          try {
+            execSync("git commit --amend --no-edit", {
+              env: { ...process.env, AUTOVERSION_AMENDING: "1" },
+              stdio: "pipe"
+            });
+            console.log("✓ [AutoVersion] Changelog enmendado exitosamente en el commit.\n");
+          } catch (e) {
+            console.error("Error al enmendar changelog:", e.message);
+          }
+        }
+      }
+    }
+    return;
+  }
+
   if (!bumpType) {
     const firstLine = lastMsg.split("\n")[0].trim();
     const ignored = firstLine.match(/^([a-z]+)(\([^\)]+\))?:/i);
@@ -698,5 +801,6 @@ echo -e "\n${BOLD}Funcionalidades activadas:${NC}"
 echo -e "  • ⚙️  .autoversion.json con comentarios y reglas personalizables"
 echo -e "  • 🔒 Detección y bloqueo automático de fuga de secretos (blockSecrets)"
 echo -e "  • 🚦 Modo estricto configurable (strict: false/true)"
+echo -e "  • 🎯 Respeto inteligente a versiones modificadas manualmente"
 echo -e "  • 📋 Generación automática y atómica de CHANGELOG.md"
 echo -e "  • 🖥️  Compatibilidad total: Terminal CLI y VS Code / GUIs\n"
