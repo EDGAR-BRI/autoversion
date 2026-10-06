@@ -2,9 +2,11 @@
 set -e
 
 # ==============================================================================
-# AutoVersion Setup Script
+# AutoVersion Setup Script v1.3.0
 # Soporte para Node.js (package.json) y Flutter / Dart (pubspec.yaml)
-# Compatible con Terminal CLI y GUIs (VS Code, GitKraken, etc.)
+# Configuración jerárquica (.autoversion.json global y local)
+# Generación atómica de CHANGELOG.md
+# Compatible con Terminal CLI y GUIs (VS Code, Cursor, GitKraken, etc.)
 # https://github.com/EDGAR-BRI/autoversion
 # ==============================================================================
 
@@ -49,7 +51,7 @@ prompt_user() {
   echo "$response"
 }
 
-# 1. Verificar Node.js (necesario para ejecutar el hook)
+# 1. Verificar Node.js
 if ! command -v node >/dev/null 2>&1; then
   echo -e "${RED}❌ Error: Node.js no está instalado o no se encuentra en el PATH.${NC}"
   echo -e "   Node.js es requerido para ejecutar el script de análisis de commits."
@@ -82,7 +84,7 @@ if [ -f "pubspec.yaml" ]; then
 fi
 
 if [ "$HAS_PKG" = false ] && [ "$HAS_PUBSPEC" = false ]; then
-  echo -e "${YELLOW}⚠️  No se detectó 'package.json' (Node) ni 'pubspec.yaml' (Flutter).${NC}"
+  echo -e "${YELLOW}⚠️  No se detectó 'package.json' (Node) ni 'pubspec.yaml' (Flutter).\${NC}"
   res=$(prompt_user "   ¿Deseas crear un 'package.json' básico con npm init? [S/n] " "S")
   if [[ "$res" =~ ^[sSyY]$ ]]; then
     npm init -y >/dev/null
@@ -97,7 +99,22 @@ fi
 # 4. Crear carpeta scripts/ si no existe
 mkdir -p scripts
 
-# 5. Generar scripts/setup-git-hooks.mjs
+# 5. Generar .autoversion.json por defecto si no existe en el proyecto
+if [ ! -f ".autoversion.json" ]; then
+  cat << 'CONFIG_EOF' > .autoversion.json
+{
+  "changelog": true,
+  "rules": {
+    "major": ["breaking"],
+    "minor": ["feat", "ui"],
+    "patch": ["fix", "style", "perf", "refactor", "chore", "hotfix"]
+  }
+}
+CONFIG_EOF
+  echo -e "${GREEN}✓ Archivo de configuración local .autoversion.json creado.${NC}"
+fi
+
+# 6. Generar scripts/setup-git-hooks.mjs
 cat << 'SETUP_HOOK_EOF' > scripts/setup-git-hooks.mjs
 import fs from "node:fs";
 import path from "node:path";
@@ -144,12 +161,10 @@ try {
     fs.writeFileSync(path.resolve(hooksDir, "post-commit"), postCommitContent, { mode: 0o755 });
     console.log("✓ [AutoVersion] Hooks pre-commit y post-commit instalados en .git/hooks/");
   }
-} catch (e) {
-  // Silencioso en entornos especiales
-}
+} catch (e) {}
 SETUP_HOOK_EOF
 
-# 6. Generar scripts/auto-version-hook.mjs
+# 7. Generar scripts/auto-version-hook.mjs
 cat << 'AUTO_VERSION_EOF' > scripts/auto-version-hook.mjs
 import fs from "node:fs";
 import path from "node:path";
@@ -158,12 +173,59 @@ import { execSync } from "node:child_process";
 const PKG_PATH = path.resolve("package.json");
 const PUBSPEC_PATH = path.resolve("pubspec.yaml");
 
+const DEFAULT_CONFIG = {
+  changelog: true,
+  changelogFile: "CHANGELOG.md",
+  rules: {
+    major: ["breaking"],
+    minor: ["feat", "ui"],
+    patch: ["fix", "style", "perf", "refactor", "chore", "hotfix"]
+  }
+};
+
 /**
- * Inspecciona el proceso ancestro de git commit en terminal
- * Compatible con Linux (/proc y ps), macOS (ps) y Windows (PowerShell)
+ * Carga jerarquía de configuración:
+ * 1. Defaults de la herramienta
+ * 2. Sobrescrito por ~/.autoversion.json (global) si existe
+ * 3. Sobrescrito por ./.autoversion.json (local del proyecto) si existe
  */
+function loadConfig() {
+  const homeDir = process.env.HOME || process.env.USERPROFILE || "";
+  const globalPath = path.resolve(homeDir, ".autoversion.json");
+  const localPath = path.resolve(".autoversion.json");
+
+  let config = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+
+  if (homeDir && fs.existsSync(globalPath)) {
+    try {
+      const g = JSON.parse(fs.readFileSync(globalPath, "utf8"));
+      if (g.changelog !== undefined) config.changelog = g.changelog;
+      if (g.changelogFile) config.changelogFile = g.changelogFile;
+      if (g.rules) {
+        if (g.rules.major) config.rules.major = g.rules.major;
+        if (g.rules.minor) config.rules.minor = g.rules.minor;
+        if (g.rules.patch) config.rules.patch = g.rules.patch;
+      }
+    } catch {}
+  }
+
+  if (fs.existsSync(localPath)) {
+    try {
+      const l = JSON.parse(fs.readFileSync(localPath, "utf8"));
+      if (l.changelog !== undefined) config.changelog = l.changelog;
+      if (l.changelogFile) config.changelogFile = l.changelogFile;
+      if (l.rules) {
+        if (l.rules.major) config.rules.major = l.rules.major;
+        if (l.rules.minor) config.rules.minor = l.rules.minor;
+        if (l.rules.patch) config.rules.patch = l.rules.patch;
+      }
+    } catch {}
+  }
+
+  return config;
+}
+
 function findGitCommitCmdline() {
-  // 1. Linux /proc
   try {
     let curr = process.ppid;
     while (curr && curr > 1) {
@@ -183,7 +245,6 @@ function findGitCommitCmdline() {
     }
   } catch {}
 
-  // 2. macOS / BSD / POSIX fallback usando ps
   try {
     let curr = process.ppid;
     for (let i = 0; i < 6 && curr > 1; i++) {
@@ -199,7 +260,6 @@ function findGitCommitCmdline() {
     }
   } catch {}
 
-  // 3. Windows nativo (PowerShell)
   if (process.platform === "win32") {
     try {
       const cmd = execSync(`powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter \"ProcessId = ${process.ppid}\").CommandLine"`, { encoding: "utf8" });
@@ -212,9 +272,6 @@ function findGitCommitCmdline() {
   return null;
 }
 
-/**
- * Extrae el mensaje de commit desde argumentos de línea de comandos
- */
 function extractCommitMessage(cmdline) {
   if (!cmdline || !Array.isArray(cmdline)) return "";
   const clean = str => (str ? str.replace(/^["'"]|["'"]$/g, "").trim() : "");
@@ -254,10 +311,10 @@ function calculateNextSemVer(currentVersion, bumpType) {
 }
 
 function bumpFlutterPubspec(bumpType) {
-  if (!fs.existsSync(PUBSPEC_PATH)) return false;
+  if (!fs.existsSync(PUBSPEC_PATH)) return null;
   const content = fs.readFileSync(PUBSPEC_PATH, "utf8");
   const match = content.match(/^[ \t]*version:[ \t]*([0-9]+)\.([0-9]+)\.([0-9]+)(?:\+([0-9]+))?/m);
-  if (!match) return false;
+  if (!match) return null;
 
   let [_, maj, min, pat, build] = match.map(n => (n !== undefined ? parseInt(n, 10) : 0));
   const nextBuild = (build || 0) + 1;
@@ -272,11 +329,11 @@ function bumpFlutterPubspec(bumpType) {
   fs.writeFileSync(PUBSPEC_PATH, updated);
   execSync("git add pubspec.yaml");
   console.log(`📱 [AutoVersion] Flutter: versión actualizada a ${newVersion} (${bumpType.toUpperCase()}) en pubspec.yaml.`);
-  return true;
+  return newVersion;
 }
 
 function bumpNodePackage(bumpType) {
-  if (!fs.existsSync(PKG_PATH)) return false;
+  if (!fs.existsSync(PKG_PATH)) return null;
   const pkg = JSON.parse(fs.readFileSync(PKG_PATH, "utf8"));
   const current = pkg.version || "0.1.0";
   const newVersion = calculateNextSemVer(current, bumpType);
@@ -285,36 +342,116 @@ function bumpNodePackage(bumpType) {
   fs.writeFileSync(PKG_PATH, JSON.stringify(pkg, null, 2) + "\n");
   execSync("git add package.json");
   console.log(`📦 [AutoVersion] Node.js: versión actualizada a ${newVersion} (${bumpType.toUpperCase()}) en package.json.`);
-  return true;
+  return newVersion;
 }
 
-function getBumpType(msg) {
+function getBumpType(msg, config) {
   if (!msg) return null;
   msg = msg.trim();
   if (msg.startsWith("Merge ") || msg.startsWith("Revert ")) return null;
 
   const firstLine = msg.split("\n")[0].trim();
-  if (/^[a-z]+(\([^\)]+\))?!:/.test(firstLine) || /BREAKING CHANGE/i.test(msg)) return "major";
-  if (/^feat(\([^\)]+\))?:/i.test(firstLine)) return "minor";
-  if (/^(fix|style|perf|refactor)(\([^\)]+\))?:/i.test(firstLine)) return "patch";
+
+  // 1. Breaking change explícito con "!" antes de ":" o "BREAKING CHANGE"
+  if (/^[a-z]+(\([^\)]+\))?!:/.test(firstLine) || /BREAKING CHANGE/i.test(msg)) {
+    return "major";
+  }
+
+  // 2. Reglas MAJOR
+  for (const prefix of config.rules.major || []) {
+    const rx = new RegExp("^" + prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(\\([^\\)]+\\))?:", "i");
+    if (rx.test(firstLine)) return "major";
+  }
+
+  // 3. Reglas MINOR
+  for (const prefix of config.rules.minor || []) {
+    const rx = new RegExp("^" + prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(\\([^\\)]+\\))?:", "i");
+    if (rx.test(firstLine)) return "minor";
+  }
+
+  // 4. Reglas PATCH
+  for (const prefix of config.rules.patch || []) {
+    const rx = new RegExp("^" + prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(\\([^\\)]+\\))?:", "i");
+    if (rx.test(firstLine)) return "patch";
+  }
+
   return null;
 }
 
-/**
- * Fase 1: pre-commit (Intercepción rápida cuando el commit proviene de terminal CLI con -m)
- */
+function updateChangelog(newVersion, msg, bumpType, config) {
+  if (!config.changelog || !newVersion) return false;
+  const changelogPath = path.resolve(config.changelogFile || "CHANGELOG.md");
+  const now = new Date();
+  const dateStr = now.toISOString().split("T")[0];
+  const firstLine = msg.split("\n")[0].trim();
+
+  let icon = "•";
+  if (bumpType === "major") icon = "💥";
+  else if (firstLine.startsWith("feat")) icon = "🚀";
+  else if (firstLine.startsWith("fix")) icon = "🐛";
+  else if (firstLine.startsWith("perf")) icon = "⚡";
+  else if (firstLine.startsWith("refactor")) icon = "🛠️";
+  else if (firstLine.startsWith("chore")) icon = "🧹";
+  else if (firstLine.startsWith("hotfix")) icon = "🔥";
+  else if (firstLine.startsWith("ui")) icon = "🎨";
+
+  const entry = `- ${icon} ${firstLine}`;
+  const versionHeader = `## [${newVersion}] - ${dateStr}`;
+
+  let content = "";
+  if (fs.existsSync(changelogPath)) {
+    content = fs.readFileSync(changelogPath, "utf8");
+  } else {
+    content = "# 📋 Historial de Cambios (Changelog)\n\nTodos los cambios notables de este proyecto serán documentados en este archivo.\n\n";
+  }
+
+  if (content.includes(`## [${newVersion}]`)) {
+    if (!content.includes(firstLine)) {
+      content = content.replace(`## [${newVersion}]`, `${versionHeader}\n${entry}`);
+    }
+  } else {
+    const titleMatch = content.match(/^# [^\n]+\n+/);
+    if (titleMatch) {
+      const title = titleMatch[0];
+      const rest = content.slice(title.length);
+      content = `${title}${versionHeader}\n${entry}\n\n${rest.trimStart()}`;
+    } else {
+      content = `# 📋 Historial de Cambios (Changelog)\n\n${versionHeader}\n${entry}\n\n${content}`;
+    }
+  }
+
+  fs.writeFileSync(changelogPath, content.trim() + "\n");
+  try {
+    execSync(`git add "${path.basename(changelogPath)}"`);
+    console.log(`📝 [AutoVersion] Changelog actualizado en ${path.basename(changelogPath)}.`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function handlePreCommit() {
+  const config = loadConfig();
   const cmdline = findGitCommitCmdline();
   const msg = extractCommitMessage(cmdline);
-  const bumpType = getBumpType(msg);
+  const bumpType = getBumpType(msg, config);
 
-  // Si no hay mensaje en CLI (ej: VS Code GUI pasa mensaje vía stdin), post-commit se encargará
-  if (!bumpType) return;
+  if (!bumpType) {
+    if (msg) {
+      const firstLine = msg.split("\n")[0].trim();
+      const ignored = firstLine.match(/^([a-z]+)(\([^\)]+\))?:/i);
+      if (ignored) {
+        console.log(`\nℹ️ [AutoVersion] Mensaje detectado: "${firstLine}"`);
+        console.log(`ℹ️ [AutoVersion] El tipo "${ignored[1]}" no incrementa versión según las reglas activas.`);
+        console.log(`ℹ️ [AutoVersion] Puedes añadirlo en .autoversion.json o usar "fix:" / "feat:".\n`);
+      }
+    }
+    return;
+  }
 
   const hasNode = fs.existsSync(PKG_PATH);
   const hasFlutter = fs.existsSync(PUBSPEC_PATH);
 
-  // Evitar duplicar incremento si ya está en staging
   if (hasFlutter) {
     try {
       const diff = execSync("git diff --cached pubspec.yaml", { encoding: "utf8" });
@@ -329,22 +466,24 @@ function handlePreCommit() {
   }
 
   console.log(`\n🚀 [AutoVersion] Mensaje detectado (CLI): "${msg.split("\n")[0]}"`);
-  if (hasFlutter) bumpFlutterPubspec(bumpType);
-  if (hasNode) bumpNodePackage(bumpType);
+  let newV = null;
+  if (hasFlutter) newV = bumpFlutterPubspec(bumpType) || newV;
+  if (hasNode) newV = bumpNodePackage(bumpType) || newV;
+
+  if (newV) {
+    updateChangelog(newV, msg, bumpType, config);
+  }
   console.log("");
 }
 
-/**
- * Fase 2: post-commit (Garantiza soporte para GUIs como VS Code, GitKraken, etc.)
- */
 function handlePostCommit() {
   if (process.env.AUTOVERSION_AMENDING === "1") return;
 
+  const config = loadConfig();
   const hasNode = fs.existsSync(PKG_PATH);
   const hasFlutter = fs.existsSync(PUBSPEC_PATH);
   if (!hasNode && !hasFlutter) return;
 
-  // Inspeccionar archivos modificados en HEAD
   let committedFiles = "";
   try {
     committedFiles = execSync("git diff-tree --no-commit-id --name-only -r --root HEAD", { encoding: "utf8" });
@@ -352,12 +491,10 @@ function handlePostCommit() {
     return;
   }
 
-  // Si el commit ya modificó la versión (por pre-commit o manualmente), no volver a tocar
   const alreadyBumped = (hasFlutter && committedFiles.includes("pubspec.yaml")) ||
                         (hasNode && committedFiles.includes("package.json"));
   if (alreadyBumped) return;
 
-  // Extraer mensaje del commit recién creado
   let lastMsg = "";
   try {
     lastMsg = execSync("git log -1 --pretty=%B", { encoding: "utf8" }).trim();
@@ -365,33 +502,31 @@ function handlePostCommit() {
     return;
   }
 
-  const bumpType = getBumpType(lastMsg);
+  const bumpType = getBumpType(lastMsg, config);
   if (!bumpType) {
     const firstLine = lastMsg.split("\n")[0].trim();
-    const ignored = firstLine.match(/^(chore|docs|test|ci|build)(\\([^\\)]+\\))?:/i);
+    const ignored = firstLine.match(/^([a-z]+)(\([^\)]+\))?:/i);
     if (ignored) {
       console.log(`\nℹ️ [AutoVersion] Mensaje detectado: "${firstLine}"`);
-      console.log(`ℹ️ [AutoVersion] El tipo "${ignored[1]}" es para mantenimiento interno y NO incrementa versión según SemVer.`);
-      console.log(`ℹ️ [AutoVersion] Para incrementar versión, usa "fix:" (PATCH) o "feat:" (MINOR).\n`);
-      try {
-        fs.appendFileSync("/tmp/autoversion.log", `[${new Date().toISOString()}] Tipo "${ignored[1]}" ignorado: "${firstLine}"\n`);
-      } catch {}
+      console.log(`ℹ️ [AutoVersion] El tipo "${ignored[1]}" no incrementa versión según las reglas activas.`);
+      console.log(`ℹ️ [AutoVersion] Puedes añadirlo en .autoversion.json o usar "fix:" / "feat:".\n`);
     }
     return;
   }
 
   console.log(`\n🚀 [AutoVersion] Mensaje detectado (GUI / stdin): "${lastMsg.split("\n")[0]}"`);
-  let modified = false;
-  if (hasFlutter) modified = bumpFlutterPubspec(bumpType) || modified;
-  if (hasNode) modified = bumpNodePackage(bumpType) || modified;
+  let newV = null;
+  if (hasFlutter) newV = bumpFlutterPubspec(bumpType) || newV;
+  if (hasNode) newV = bumpNodePackage(bumpType) || newV;
 
-  if (modified) {
+  if (newV) {
+    updateChangelog(newV, lastMsg, bumpType, config);
     try {
       execSync("git commit --amend --no-edit", {
         env: { ...process.env, AUTOVERSION_AMENDING: "1" },
         stdio: "pipe"
       });
-      console.log("✓ [AutoVersion] Versión enmendada exitosamente en el commit.\n");
+      console.log("✓ [AutoVersion] Versión y Changelog enmendados exitosamente en el commit.\n");
     } catch (e) {
       console.error("Error en post-commit amend:", e.message);
     }
@@ -406,15 +541,13 @@ function main() {
     } else {
       handlePreCommit();
     }
-  } catch (err) {
-    // Silencioso para no interferir con el flujo habitual de git
-  }
+  } catch (err) {}
 }
 
 main();
 AUTO_VERSION_EOF
 
-# 7. Si existe package.json, registrar el script prepare
+# 8. Si existe package.json, registrar el script prepare
 if [ "$HAS_PKG" = true ]; then
   node -e '
   const fs = require("node:fs");
@@ -437,7 +570,7 @@ if [ "$HAS_PKG" = true ]; then
   '
 fi
 
-# 8. Ejecutar configuración inicial de los hooks
+# 9. Ejecutar configuración inicial de los hooks
 node scripts/setup-git-hooks.mjs
 
 echo -e "\n${GREEN}${BOLD}🎉 ¡Auto-versionamiento configurado con éxito!${NC}"
@@ -448,12 +581,7 @@ if [ "$HAS_PKG" = true ]; then
   echo -e "${CYAN}📦 Proyecto Node.js detectado: se actualizará 'package.json'.\${NC}"
 fi
 
-echo -e "\n${BOLD}Compatibilidad total habilitada:${NC}"
-echo -e "  • Terminal CLI (git commit -m \"...\")"
-echo -e "  • VS Code / Cursor / GitKraken (Source Control UI)"
-
-echo -e "\n${BOLD}Reglas de incremento:${NC}"
-echo -e "  • ${BOLD}feat:...${NC}        → Minor (+0.1.0, build +1)"
-echo -e "  • ${BOLD}fix:...${NC}         → Patch (+0.0.1, build +1) (fix, refactor, perf, style)"
-echo -e "  • ${BOLD}feat!:...${NC}       → Major (+1.0.0, build +1) o BREAKING CHANGE"
-echo -e "  • ${BOLD}chore:...${NC}       → Sin incremento (docs, test, chore, build)\n"
+echo -e "\n${BOLD}Funcionalidades activadas:${NC}"
+echo -e "  • ⚙️  Reglas configurables en .autoversion.json (global en ~/.autoversion.json)"
+echo -e "  • 📋 Generación automática y atómica de CHANGELOG.md"
+echo -e "  • 🖥️  Compatibilidad total: Terminal CLI y VS Code / GUIs\n"

@@ -44,7 +44,11 @@ npx github:EDGAR-BRI/autoversion
    - Actualiza el campo `"version"` respetando el estándar SemVer.
 3. **🔄 Proyectos Híbridos / Fullstack:**
    - Si tu proyecto contiene tanto `package.json` como `pubspec.yaml`, actualiza y sincroniza ambos al unísono.
-4. **🖥️ Compatibilidad Universal (CLI + GUIs):**
+4. **📋 Generación Automática de CHANGELOG.md:**
+   - En cada incremento de versión, actualiza automáticamente un archivo `CHANGELOG.md` atómico con formato Keep a Changelog.
+5. **⚙️ Reglas Totalmente Configurables (.autoversion.json):**
+   - Personaliza qué prefijos mueven qué versión tanto a nivel global (`~/.autoversion.json`) como por proyecto (`./.autoversion.json`).
+6. **🖥️ Compatibilidad Universal (CLI + GUIs):**
    - Funciona sin configuración adicional tanto en terminal (`git commit -m "..."`) como haciendo clic en el botón de commit de **VS Code**, **Cursor**, **GitKraken** o editores interactivos.
 
 ---
