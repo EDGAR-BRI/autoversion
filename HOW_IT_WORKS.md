@@ -22,26 +22,50 @@ Tradicionalmente, para mantener las versiones de un proyecto según [SemVer (Sem
 
 Cuando ejecutas un comando de commit en tu terminal, ocurre la siguiente secuencia:
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Dev as Desarrollador
-    participant Git as Git Engine
-    participant Hook as .git/hooks/pre-commit
-    participant Script as scripts/auto-version-hook.mjs
-    participant File as package.json / pubspec.yaml
-
-    Dev->>Git: git commit -m "feat: login con google"
-    Git->>Hook: Dispara hook pre-commit
-    Hook->>Script: Ejecuta auto-version-hook.mjs
-    Script->>Script: 1. Inspecciona proceso ancestro (extrae mensaje)
-    Script->>Script: 2. Clasifica Conventional Commit (feat -> MINOR)
-    Script->>File: 3. Lee versión actual y calcula la siguiente
-    Script->>File: 4. Guarda la nueva versión en disco
-    Script->>Git: 5. Ejecuta git add package.json / pubspec.yaml
-    Script-->>Hook: Retorna éxito (código 0)
-    Hook-->>Git: Permite continuar el commit
-    Git->>Dev: Commit creado con la versión actualizada
+```text
+┌──────────────────────────────────────────────────────────────────────────┐
+│  1. Desarrollador ejecuta:                                               │
+│     git commit -m "feat: login con google"                               │
+└────────────────────────────────────┬─────────────────────────────────────┘
+                                     │
+                                     ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│  2. Git dispara el hook pre-commit:                                      │
+│     .git/hooks/pre-commit  ───▶  node scripts/auto-version-hook.mjs      │
+└────────────────────────────────────┬─────────────────────────────────────┘
+                                     │
+                                     ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│  3. Inspección del proceso ancestro en el SO:                            │
+│     Rastrea el comando original y extrae el mensaje: "feat: ..."        │
+└────────────────────────────────────┬─────────────────────────────────────┘
+                                     │
+                                     ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│  4. Clasificación Conventional Commit:                                  │
+│     • feat:             ➜  MINOR  (+0.1.0)                               │
+│     • fix / refactor:   ➜  PATCH  (+0.0.1)                               │
+│     • feat! / BREAKING: ➜  MAJOR  (+1.0.0)                               │
+└────────────────────────────────────┬─────────────────────────────────────┘
+                                     │
+                                     ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│  5. Actualización en disco:                                              │
+│     • Node.js:  package.json (SemVer)                                    │
+│     • Flutter:  pubspec.yaml (SemVer + BuildNumber)                      │
+└────────────────────────────────────┬─────────────────────────────────────┘
+                                     │
+                                     ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│  6. Inclusión atómica en Git:                                            │
+│     git add package.json / pubspec.yaml                                  │
+└────────────────────────────────────┬─────────────────────────────────────┘
+                                     │
+                                     ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│  7. Commit completado con éxito:                                         │
+│     El commit se crea con tu código Y la nueva versión en el mismo paso  │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
