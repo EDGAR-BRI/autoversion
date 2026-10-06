@@ -1,7 +1,7 @@
 {
   "name": "@edgar-bri/autoversion",
-  "version": "1.1.0",
-  "description": "Auto-versionamiento semántico por Conventional Commits para proyectos Node.js y Flutter / Dart",
+  "version": "1.2.0",
+  "description": "Auto-versionamiento sem\u00e1ntico por Conventional Commits para proyectos Node.js y Flutter / Dart",
   "type": "module",
   "bin": {
     "autoversion": "./bin/index.mjs"

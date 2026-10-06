@@ -15,91 +15,77 @@ Tradicionalmente, para mantener las versiones de un proyecto según [SemVer (Sem
 - **Atómico:** La versión se actualiza y entra en el **mismo commit** que tus cambios de código.
 - **Políglota:** Funciona en proyectos **Node.js** (`package.json`) y **Flutter / Dart** (`pubspec.yaml`).
 - **Multiplataforma:** Compatible con Linux, macOS y Windows.
+- **Compatible con Terminal y GUIs:** Funciona tanto ejecutando `git commit -m "..."` en consola como haciendo click en el botón de commit de **VS Code**, **Cursor**, **GitKraken** o editores interactivos.
 
 ---
 
-## 2. Flujo de Ejecución (Paso a Paso)
+## 2. Flujo de Ejecución Dual (CLI y VS Code / GUIs)
 
-Cuando ejecutas un comando de commit en tu terminal, ocurre la siguiente secuencia:
+Para garantizar compatibilidad universal, el sistema implementa una **estrategia de hook dual** (`pre-commit` y `post-commit`):
 
 ```text
-┌──────────────────────────────────────────────────────────────────────────┐
-│  1. Desarrollador ejecuta:                                               │
-│     git commit -m "feat: login con google"                               │
-└────────────────────────────────────┬─────────────────────────────────────┘
-                                     │
-                                     ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│  2. Git dispara el hook pre-commit:                                      │
-│     .git/hooks/pre-commit  ───▶  node scripts/auto-version-hook.mjs      │
-└────────────────────────────────────┬─────────────────────────────────────┘
-                                     │
-                                     ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│  3. Inspección del proceso ancestro en el SO:                            │
-│     Rastrea el comando original y extrae el mensaje: "feat: ..."        │
-└────────────────────────────────────┬─────────────────────────────────────┘
-                                     │
-                                     ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│  4. Clasificación Conventional Commit:                                  │
-│     • feat:             ➜  MINOR  (+0.1.0)                               │
-│     • fix / refactor:   ➜  PATCH  (+0.0.1)                               │
-│     • feat! / BREAKING: ➜  MAJOR  (+1.0.0)                               │
-└────────────────────────────────────┬─────────────────────────────────────┘
-                                     │
-                                     ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│  5. Actualización en disco:                                              │
-│     • Node.js:  package.json (SemVer)                                    │
-│     • Flutter:  pubspec.yaml (SemVer + BuildNumber)                      │
-└────────────────────────────────────┬─────────────────────────────────────┘
-                                     │
-                                     ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│  6. Inclusión atómica en Git:                                            │
-│     git add package.json / pubspec.yaml                                  │
-└────────────────────────────────────┬─────────────────────────────────────┘
-                                     │
-                                     ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│  7. Commit completado con éxito:                                         │
-│     El commit se crea con tu código Y la nueva versión en el mismo paso  │
-└──────────────────────────────────────────────────────────────────────────┘
+                                ¿Desde dónde se hace el commit?
+                                              │
+                      ┌───────────────────────┴───────────────────────┐
+                      ▼                                               ▼
+         [ RUTA A: TERMINAL CLI ]                        [ RUTA B: VS CODE / GUI ]
+          git commit -m "feat: ..."                     Botón Commit en Source Control
+                      │                                               │
+                      ▼                                               ▼
+             .git/hooks/pre-commit                           .git/hooks/pre-commit
+                      │                                               │
+             Detecta flag -m en CLI                       Mensaje enviado por stdin (vacío en CLI)
+                      │                                               │
+        Actualiza versión en disco                      Pasa limpio sin tocar nada
+                      │                                               │
+         git add package / pubspec                                    ▼
+                      │                                  Git crea el commit de usuario
+                      ▼                                               │
+        Git crea el commit atómico                                    ▼
+     (Código + Versión en un solo paso)                     .git/hooks/post-commit
+                      │                                               │
+                      ▼                                  Lee mensaje del commit desde HEAD
+             .git/hooks/post-commit                                   │
+                      │                                 ¿Es Conventional Commit y no fue bumped?
+         Verifica si ya fue bumped                                    │
+           (Sí -> Termina de inmediato)                  Actualiza versión en disco
+                                                                      │
+                                                         git add package / pubspec
+                                                                      │
+                                                         git commit --amend --no-edit
+                                                                      │
+                                                                      ▼
+                                                         Commit enmendado atómicamente
 ```
 
 ---
 
-## 3. El Desafío Técnico y su Solución
+## 3. El Desafío Técnico de las GUIs y su Solución
 
-En Git existen dos hooks principales relacionados con la creación de commits:
-1. **`commit-msg`**: Se ejecuta cuando el mensaje ya está escrito en el archivo `.git/COMMIT_EDITMSG`, **pero** en este punto el índice de Git (los archivos en *staging*) ya está congelado. Modificar `package.json` aquí no lo incluye en el commit actual a menos que se fuerce un commit adicional.
-2. **`pre-commit`**: Se ejecuta antes de congelar el índice, lo que permite hacer `git add` y meter cambios en el mismo commit. **Sin embargo**, en esta fase Git aún no ha creado el archivo `.git/COMMIT_EDITMSG`.
+En Git, el ciclo de vida de los hooks presenta diferencias críticas dependiendo de cómo se ejecute el commit:
 
-### La Solución: Inspección del Proceso Ancestro
+### El Problema de VS Code y GUIs
+1. **En Terminal CLI (`git commit -m "..."`):**  
+   El mensaje de commit se pasa como argumento de línea de comandos (`-m` o `--message`). El script puede inspeccionar el proceso padre (`/proc/<pid>/cmdline` o `ps`) y extraer el mensaje en fase `pre-commit`, antes de que el commit se escriba en el historial.
+2. **En VS Code / GitKraken / GUIs:**  
+   VS Code **no pasa** el mensaje como argumento `-m`. En su lugar, escribe el mensaje en standard input (stdin) mediante `git commit --quiet --file -` o archivos temporales.  
+   En fase `pre-commit`, Git aún no ha creado `.git/COMMIT_EDITMSG` ni redirige stdin al hook. Por ende, ningún script en `pre-commit` puede conocer el mensaje por adelantado.
+3. **¿Por qué no usar únicamente `commit-msg`?**  
+   En el hook `commit-msg`, el árbol de staging de Git ya está congelado. Modificar archivos y hacer `git add` allí es ignorado por Git para el commit en curso.
 
-Para capturar el mensaje en la fase `pre-commit`, el script rastrea hacia atrás el árbol de procesos de tu sistema operativo hasta encontrar el comando original `git commit`:
-
-```text
-Proceso C (Node.js: auto-version-hook.mjs) [Hijo]
-      ▲
-Proceso B (Bash: .git/hooks/pre-commit) [Padre]
-      ▲
-Proceso A (Git: git commit -m "feat: mi cambio") [Abuelo / Ancestro]
-```
-
-#### ¿Cómo lo hace en cada sistema operativo?
-- **En Linux / WSL:** Lee el sistema de archivos virtual del kernel: `/proc/<pid>/cmdline` y recorre los PPID en `/proc/<pid>/stat`. Es instantáneo y directo.
-- **En macOS / BSD:** Usa `ps -p <pid> -o ppid=,command=` para subir por los procesos padres.
-- **En Windows:** Consulta las instancias de procesos mediante `PowerShell (Get-CimInstance Win32_Process)`.
-
-Una vez ubicado el comando `git commit`, extrae el texto pasado en los argumentos `-m`, `--message`, `-F` o `--file`.
+### La Solución: Arquitectura Cooperativa Dual
+- **Fase `pre-commit`:** Se encarga de capturar commits rápidos por CLI de terminal. Si detecta el mensaje con `-m`, sube la versión y hace `git add`. Si no detecta argumentos (como en VS Code), no hace nada y delega la tarea a `post-commit`.
+- **Fase `post-commit`:** Se dispara inmediatamente después de que el commit ha sido creado.  
+  1. Inspecciona los archivos modificados en `HEAD` con `git diff-tree --no-commit-id --name-only -r --root HEAD`.  
+  2. Si `pubspec.yaml` o `package.json` ya fueron modificados en ese commit (porque `pre-commit` ya actuó o el usuario los editó), finaliza inmediatamente.  
+  3. Si la versión no fue modificada y el commit cumple con Conventional Commits (`feat:`, `fix:`, etc.), incrementa la versión y ejecuta `git commit --amend --no-edit`.  
+  4. Protegido contra bucles infinitos mediante la variable de entorno `AUTOVERSION_AMENDING=1` y la validación de archivos modificados.
 
 ---
 
 ## 4. Reglas de Clasificación SemVer
 
-El script analiza el prefijo del mensaje siguiendo la especificación de **Conventional Commits**:
+El script analiza la primera línea del mensaje siguiendo la especificación de **Conventional Commits**:
 
 | Prefijo en el Commit | Regla SemVer | Node.js (`package.json`) | Flutter (`pubspec.yaml`) | Razón / Caso de Uso |
 | :--- | :--- | :--- | :--- | :--- |
@@ -122,39 +108,43 @@ version: 1.1.0+2
 ```
 
 El script de auto-versionado:
-1. Detecta la expresión regular `version: (\d+)\.(\d+)\.(\d+)\+(\d+)`.
+1. Detecta la expresión regular `version: (\d+)\.(\d+)\.(\d+)(?:\+(\d+))?`.
 2. Calcula el incremento SemVer (`MAJOR`, `MINOR` o `PATCH`).
 3. **Incrementa obligatoriamente el `Build Number` (`+1`)** en cada cambio de versión, asegurando que el APK / Bundle generado sea siempre aceptado por Google Play y App Store sin rechazos.
 
 ---
 
-## 6. Mecanismos de Seguridad y Casos Borde
+## 6. Mecanismos de Seguridad y Resiliencia
 
-1. **Evita incrementos dobles:**  
-   Antes de modificar nada, ejecuta `git diff --cached package.json` (o `pubspec.yaml`). Si el desarrollador ya modificó la versión manualmente en ese commit, el script se detiene y no la vuelve a incrementar.
+1. **Evita incrementos dobles o bucles:**  
+   - En `pre-commit`: Valida `git diff --cached` antes de tocar archivos.
+   - En `post-commit`: Valida `git diff-tree --name-only HEAD` y el guard `AUTOVERSION_AMENDING=1`. Si la versión ya fue tocada, sale inmediatamente.
 2. **Ignora commits automáticos:**  
    Si el commit empieza con `Merge ` o `Revert `, el script se cancela para no alterar la versión por operaciones de ramas.
-3. **Tolerancia a fallos:**  
-   Todo el proceso está protegido en un bloque `try/catch`. Si ocurre un escenario imprevisto (ej. sintaxis inusual), el script no interrumpe el commit del desarrollador.
+3. **Detección inteligente de Node en entornos GUI:**  
+   Los hooks incluyen un cargador de entorno que localiza el binario de Node.js (incluso bajo NVM, FNM, Volta, ASDF o Homebrew) cuando se ejecutan dentro de VS Code u otros entornos de escritorio que no heredan el `.bashrc` completo.
+4. **Tolerancia a fallos:**  
+   Todo el proceso está protegido en un bloque `try/catch`. Si ocurre un escenario imprevisto, el script nunca abortará el commit del desarrollador.
 
 ---
 
 ## 7. Estructura de Archivos en el Proyecto
 
-Al instalarlo en un proyecto, se generan únicamente dos archivos pequeños:
+Al instalarlo en un proyecto, se generan únicamente los siguientes archivos:
 
 ```text
 mi-proyecto/
 ├── .git/
 │   └── hooks/
-│       └── pre-commit           # Script Bash ejecutable que invoca al hook
+│       ├── pre-commit           # Intercepta commits desde terminal CLI (-m)
+│       └── post-commit          # Intercepta commits desde VS Code / GUIs (stdin)
 ├── scripts/
 │   ├── auto-version-hook.mjs    # Lógica de detección de commit y bumping
-│   └── setup-git-hooks.mjs      # Auto-instalador para nuevos clones
+│   └── setup-git-hooks.mjs      # Instalador de hooks para nuevos clones
 ├── package.json (o pubspec.yaml)
 ```
 
 - **¿Por qué `.mjs`?**  
-  Usar la extensión `.mjs` le indica a Node.js que ejecute el archivo con sintaxis moderna de módulos ES (`import`), evitando errores de incompatibilidad tanto en proyectos que usen `"type": "module"` como en proyectos `"type": "commonjs"`.
+  Usar la extensión `.mjs` le indica a Node.js que ejecute el archivo con sintaxis moderna de módulos ES (`import`), garantizando compatibilidad tanto en proyectos `"type": "module"` como en proyectos CommonJS.
 - **¿Cómo se mantiene al clonar el repositorio?**  
-  En proyectos Node, `package.json` incluye `"prepare": "node scripts/setup-git-hooks.mjs"`. Cuando cualquier persona (o tú en otra máquina) clona el repo y corre `npm install` o `pnpm install`, el hook se activa automáticamente.
+  En proyectos Node, `package.json` incluye `"prepare": "node scripts/setup-git-hooks.mjs"`. Cuando cualquier persona (o tú en otra máquina) clona el repo y corre `npm install` o `pnpm install`, los hooks se configuran automáticamente sin intervención manual.

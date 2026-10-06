@@ -29,7 +29,7 @@ El script detecta automáticamente el stack de tu proyecto:
 1. **Node.js / JS / TS** (`package.json`): Actualiza el campo `"version"` según SemVer.
 2. **Flutter / Dart** (`pubspec.yaml`): Actualiza tanto la versión semántica como el **Build Number** (`X.Y.Z+Build`), obligatorio para publicar en Google Play Store y Apple App Store.
 3. Si el proyecto tiene ambos (híbrido), mantiene ambos archivos sincronizados.
-4. Configura el hook `.git/hooks/pre-commit` de forma atómica: la nueva versión entra en el mismo commit que tus cambios.
+4. Configura los hooks `.git/hooks/pre-commit` y `post-commit`: garantizando compatibilidad 100% tanto en Terminal CLI como desde la interfaz visual de VS Code, Cursor o GitKraken.
 
 ---
 

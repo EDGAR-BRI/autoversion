@@ -4,16 +4,17 @@ set -e
 # ==============================================================================
 # AutoVersion Setup Script
 # Soporte para Node.js (package.json) y Flutter / Dart (pubspec.yaml)
+# Compatible con Terminal CLI y GUIs (VS Code, GitKraken, etc.)
 # https://github.com/EDGAR-BRI/autoversion
 # ==============================================================================
 
-BOLD='\033[1m'
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-RED='\033[0;31m'
-NC='\033[0m'
+BOLD="\033[1m"
+GREEN="\033[0;32m"
+BLUE="\033[0;34m"
+YELLOW="\033[1;33m"
+CYAN="\033[0;36m"
+RED="\033[0;31m"
+NC="\033[0m"
 
 echo -e "${BLUE}${BOLD}🚀 [AutoVersion] Configurando auto-versionamiento en el proyecto actual...${NC}\n"
 
@@ -98,43 +99,68 @@ mkdir -p scripts
 
 # 5. Generar scripts/setup-git-hooks.mjs
 cat << 'SETUP_HOOK_EOF' > scripts/setup-git-hooks.mjs
-import fs from 'node:fs';
-import path from 'node:path';
+import fs from "node:fs";
+import path from "node:path";
 
-const hookPath = path.resolve('.git/hooks/pre-commit');
-const scriptContent = `#!/usr/bin/env bash
+const hooksDir = path.resolve(".git/hooks");
 
-# Auto-versionador basado en Conventional Commits
+const nodeEnvLoader = `# Cargar PATH común de Node (nvm, fnm, brew, volta, asdf) por si el entorno GUI no lo tiene
+if ! command -v node >/dev/null 2>&1; then
+  export NVM_DIR="$HOME/.nvm"
+  [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+  for p in "$HOME/.nvm/versions/node"/*/"bin" "$HOME/.fnm/current/bin" "$HOME/.asdf/shims" "$HOME/.volta/bin" /usr/local/bin /usr/bin; do
+    if [ -x "$p/node" ]; then
+      export PATH="$p:$PATH"
+      break
+    fi
+  done
+fi
+`;
+
+const preCommitContent = `#!/usr/bin/env bash
+${nodeEnvLoader}
 if [ -f "scripts/auto-version-hook.mjs" ]; then
-  exec node scripts/auto-version-hook.mjs
+  exec node scripts/auto-version-hook.mjs --pre-commit
 elif [ -f "scripts/auto-version-hook.js" ]; then
-  exec node scripts/auto-version-hook.js
+  exec node scripts/auto-version-hook.js --pre-commit
+fi
+`;
+
+const postCommitContent = `#!/usr/bin/env bash
+${nodeEnvLoader}
+if [ -f "scripts/auto-version-hook.mjs" ]; then
+  exec node scripts/auto-version-hook.mjs --post-commit
+elif [ -f "scripts/auto-version-hook.js" ]; then
+  exec node scripts/auto-version-hook.js --post-commit
 fi
 `;
 
 try {
-  const hooksDir = path.resolve('.git/hooks');
   if (fs.existsSync(hooksDir)) {
-    fs.writeFileSync(hookPath, scriptContent, { mode: 0o755 });
-    console.log('✓ [AutoVersion] Hook pre-commit instalado en .git/hooks/pre-commit');
+    fs.writeFileSync(path.resolve(hooksDir, "pre-commit"), preCommitContent, { mode: 0o755 });
+    fs.writeFileSync(path.resolve(hooksDir, "post-commit"), postCommitContent, { mode: 0o755 });
+    console.log("✓ [AutoVersion] Hooks pre-commit y post-commit instalados en .git/hooks/");
   }
 } catch (e) {
-  // Ignorar en entornos sin git
+  // Silencioso en entornos especiales
 }
 SETUP_HOOK_EOF
 
-# 6. Generar scripts/auto-version-hook.mjs (Soporte Node.js + Flutter)
+# 6. Generar scripts/auto-version-hook.mjs
 cat << 'AUTO_VERSION_EOF' > scripts/auto-version-hook.mjs
-import fs from 'node:fs';
-import path from 'node:path';
-import { execSync } from 'node:child_process';
+import fs from "node:fs";
+import path from "node:path";
+import { execSync } from "node:child_process";
 
-const PKG_PATH = path.resolve('package.json');
-const PUBSPEC_PATH = path.resolve('pubspec.yaml');
+const PKG_PATH = path.resolve("package.json");
+const PUBSPEC_PATH = path.resolve("pubspec.yaml");
 
 /**
- * Inspecciona el proceso ancestro de git commit
- * Compatible con Linux (/proc y ps), macOS (ps) y Windows (powershell)
+ * Inspecciona el proceso ancestro de git commit en terminal
+ * Compatible con Linux (/proc y ps), macOS (ps) y Windows (PowerShell)
  */
 function findGitCommitCmdline() {
   // 1. Linux /proc
@@ -142,16 +168,14 @@ function findGitCommitCmdline() {
     let curr = process.ppid;
     while (curr && curr > 1) {
       if (fs.existsSync(`/proc/${curr}/cmdline`)) {
-        const rawCmd = fs.readFileSync(`/proc/${curr}/cmdline`, 'utf8');
+        const rawCmd = fs.readFileSync(`/proc/${curr}/cmdline`, "utf8");
         if (rawCmd) {
-          const cmdline = rawCmd.split('\0').filter(Boolean);
-          const isGit = cmdline.some(arg => arg === 'git' || arg.endsWith('/git') || arg.endsWith('git.exe'));
-          const isCommit = cmdline.includes('commit');
-          if (isGit && isCommit) {
-            return cmdline;
-          }
+          const cmdline = rawCmd.split("\0").filter(Boolean);
+          const isGit = cmdline.some(arg => arg === "git" || arg.endsWith("/git") || arg.endsWith("git.exe"));
+          const isCommit = cmdline.includes("commit");
+          if (isGit && isCommit) return cmdline;
         }
-        const stat = fs.readFileSync(`/proc/${curr}/stat`, 'utf8').split(' ');
+        const stat = fs.readFileSync(`/proc/${curr}/stat`, "utf8").split(" ");
         curr = parseInt(stat[3], 10);
       } else {
         break;
@@ -163,24 +187,24 @@ function findGitCommitCmdline() {
   try {
     let curr = process.ppid;
     for (let i = 0; i < 6 && curr > 1; i++) {
-      const out = execSync(`ps -p ${curr} -o ppid=,command=`, { encoding: 'utf8' }).trim();
+      const out = execSync(`ps -p ${curr} -o ppid=,command=`, { encoding: "utf8" }).trim();
       if (!out) break;
       const parts = out.split(/\s+/);
       const parentPid = parseInt(parts[0], 10);
       const cmdStr = out.slice(parts[0].length).trim();
       if (/\bgit(\.exe)?\b.*commit/.test(cmdStr)) {
-        return cmdStr.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || cmdStr.split(' ');
+        return cmdStr.match(/(?:[^\s"'"]+|"[^"]*"|'[^']*')+/g) || cmdStr.split(" ");
       }
       curr = parentPid;
     }
   } catch {}
 
   // 3. Windows nativo (PowerShell)
-  if (process.platform === 'win32') {
+  if (process.platform === "win32") {
     try {
-      const cmd = execSync(`powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter \\"ProcessId = ${process.ppid}\\").CommandLine"`, { encoding: 'utf8' });
+      const cmd = execSync(`powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter \"ProcessId = ${process.ppid}\").CommandLine"`, { encoding: "utf8" });
       if (cmd && /\bgit(\.exe)?\b.*commit/.test(cmd)) {
-        return cmd.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || cmd.split(' ');
+        return cmd.match(/(?:[^\s"'"]+|"[^"]*"|'[^']*')+/g) || cmd.split(" ");
       }
     } catch {}
   }
@@ -189,136 +213,189 @@ function findGitCommitCmdline() {
 }
 
 /**
- * Extrae el mensaje de commit desde los argumentos de git
+ * Extrae el mensaje de commit desde argumentos de línea de comandos
  */
 function extractCommitMessage(cmdline) {
-  if (!cmdline || !Array.isArray(cmdline)) return '';
-  const clean = str => (str ? str.replace(/^["']|["']$/g, '').trim() : '');
+  if (!cmdline || !Array.isArray(cmdline)) return "";
+  const clean = str => (str ? str.replace(/^["'"]|["'"]$/g, "").trim() : "");
 
-  // 1. Flags -m o --message
   for (let i = 0; i < cmdline.length; i++) {
     const arg = cmdline[i];
-    if (arg === '-m' || arg === '--message') {
+    if (arg === "-m" || arg === "--message") {
       if (cmdline[i + 1]) return clean(cmdline[i + 1]);
-    } else if (arg.startsWith('--message=')) {
-      return clean(arg.slice('--message='.length));
-    } else if (arg.startsWith('-m=')) {
+    } else if (arg.startsWith("--message=")) {
+      return clean(arg.slice("--message=".length));
+    } else if (arg.startsWith("-m=")) {
       return clean(arg.slice(3));
-    }
-  }
-
-  // 2. Flags -F o --file
-  for (let i = 0; i < cmdline.length; i++) {
-    const arg = cmdline[i];
-    if (arg === '-F' || arg === '--file') {
+    } else if (arg === "-F" || arg === "--file") {
       const filePath = clean(cmdline[i + 1]);
-      if (filePath && fs.existsSync(filePath)) {
-        return fs.readFileSync(filePath, 'utf8').trim();
+      if (filePath && filePath !== "-" && fs.existsSync(filePath)) {
+        return fs.readFileSync(filePath, "utf8").trim();
       }
-    } else if (arg.startsWith('--file=') || arg.startsWith('-F=')) {
-      const filePath = clean(arg.split('=')[1]);
-      if (filePath && fs.existsSync(filePath)) {
-        return fs.readFileSync(filePath, 'utf8').trim();
+    } else if (arg.startsWith("--file=") || arg.startsWith("-F=")) {
+      const filePath = clean(arg.split("=")[1]);
+      if (filePath && filePath !== "-" && fs.existsSync(filePath)) {
+        return fs.readFileSync(filePath, "utf8").trim();
       }
     }
   }
-
-  return '';
+  return "";
 }
 
 function calculateNextSemVer(currentVersion, bumpType) {
-  const versionParts = currentVersion.split('-')[0].split('.').map(n => parseInt(n, 10) || 0);
+  const versionParts = currentVersion.split("-")[0].split(".").map(n => parseInt(n, 10) || 0);
   while (versionParts.length < 3) versionParts.push(0);
   let [maj, min, pat] = versionParts;
 
-  if (bumpType === 'major') return `${maj + 1}.0.0`;
-  if (bumpType === 'minor') return `${maj}.${min + 1}.0`;
-  if (bumpType === 'patch') return `${maj}.${min}.${pat + 1}`;
+  if (bumpType === "major") return `${maj + 1}.0.0`;
+  if (bumpType === "minor") return `${maj}.${min + 1}.0`;
+  if (bumpType === "patch") return `${maj}.${min}.${pat + 1}`;
   return currentVersion;
 }
 
 function bumpFlutterPubspec(bumpType) {
-  if (!fs.existsSync(PUBSPEC_PATH)) return;
-
-  // Evitar duplicar incremento si pubspec.yaml ya tiene cambios en staging
-  try {
-    const diff = execSync('git diff --cached pubspec.yaml', { encoding: 'utf8' });
-    if (/^\+[ \t]*version:/m.test(diff)) return;
-  } catch {}
-
-  const content = fs.readFileSync(PUBSPEC_PATH, 'utf8');
+  if (!fs.existsSync(PUBSPEC_PATH)) return false;
+  const content = fs.readFileSync(PUBSPEC_PATH, "utf8");
   const match = content.match(/^[ \t]*version:[ \t]*([0-9]+)\.([0-9]+)\.([0-9]+)(?:\+([0-9]+))?/m);
-  if (!match) return;
+  if (!match) return false;
 
   let [_, maj, min, pat, build] = match.map(n => (n !== undefined ? parseInt(n, 10) : 0));
   const nextBuild = (build || 0) + 1;
 
-  if (bumpType === 'major') { maj += 1; min = 0; pat = 0; }
-  else if (bumpType === 'minor') { min += 1; pat = 0; }
-  else if (bumpType === 'patch') { pat += 1; }
+  if (bumpType === "major") { maj += 1; min = 0; pat = 0; }
+  else if (bumpType === "minor") { min += 1; pat = 0; }
+  else if (bumpType === "patch") { pat += 1; }
 
   const newVersion = `${maj}.${min}.${pat}+${nextBuild}`;
   const updated = content.replace(/^[ \t]*version:[ \t]*.*$/m, `version: ${newVersion}`);
 
   fs.writeFileSync(PUBSPEC_PATH, updated);
-  execSync('git add pubspec.yaml');
+  execSync("git add pubspec.yaml");
   console.log(`📱 [AutoVersion] Flutter: versión actualizada a ${newVersion} (${bumpType.toUpperCase()}) en pubspec.yaml.`);
+  return true;
 }
 
 function bumpNodePackage(bumpType) {
-  if (!fs.existsSync(PKG_PATH)) return;
-
-  // Evitar duplicar incremento si package.json ya tiene cambios en staging
-  try {
-    const diff = execSync('git diff --cached package.json', { encoding: 'utf8' });
-    if (diff.includes('"version":')) return;
-  } catch {}
-
-  const pkg = JSON.parse(fs.readFileSync(PKG_PATH, 'utf8'));
-  const current = pkg.version || '0.1.0';
+  if (!fs.existsSync(PKG_PATH)) return false;
+  const pkg = JSON.parse(fs.readFileSync(PKG_PATH, "utf8"));
+  const current = pkg.version || "0.1.0";
   const newVersion = calculateNextSemVer(current, bumpType);
 
   pkg.version = newVersion;
-  fs.writeFileSync(PKG_PATH, JSON.stringify(pkg, null, 2) + '\n');
-  execSync('git add package.json');
+  fs.writeFileSync(PKG_PATH, JSON.stringify(pkg, null, 2) + "\n");
+  execSync("git add package.json");
   console.log(`📦 [AutoVersion] Node.js: versión actualizada a ${newVersion} (${bumpType.toUpperCase()}) en package.json.`);
+  return true;
+}
+
+function getBumpType(msg) {
+  if (!msg) return null;
+  msg = msg.trim();
+  if (msg.startsWith("Merge ") || msg.startsWith("Revert ")) return null;
+
+  const firstLine = msg.split("\n")[0].trim();
+  if (/^[a-z]+(\([^\)]+\))?!:/.test(firstLine) || /BREAKING CHANGE/i.test(msg)) return "major";
+  if (/^feat(\([^\)]+\))?:/i.test(firstLine)) return "minor";
+  if (/^(fix|style|perf|refactor)(\([^\)]+\))?:/i.test(firstLine)) return "patch";
+  return null;
+}
+
+/**
+ * Fase 1: pre-commit (Intercepción rápida cuando el commit proviene de terminal CLI con -m)
+ */
+function handlePreCommit() {
+  const cmdline = findGitCommitCmdline();
+  const msg = extractCommitMessage(cmdline);
+  const bumpType = getBumpType(msg);
+
+  // Si no hay mensaje en CLI (ej: VS Code GUI pasa mensaje vía stdin), post-commit se encargará
+  if (!bumpType) return;
+
+  const hasNode = fs.existsSync(PKG_PATH);
+  const hasFlutter = fs.existsSync(PUBSPEC_PATH);
+
+  // Evitar duplicar incremento si ya está en staging
+  if (hasFlutter) {
+    try {
+      const diff = execSync("git diff --cached pubspec.yaml", { encoding: "utf8" });
+      if (/^\+[ \t]*version:/m.test(diff)) return;
+    } catch {}
+  }
+  if (hasNode) {
+    try {
+      const diff = execSync("git diff --cached package.json", { encoding: "utf8" });
+      if (diff.includes('"version":')) return;
+    } catch {}
+  }
+
+  console.log(`\n🚀 [AutoVersion] Mensaje detectado (CLI): "${msg.split("\n")[0]}"`);
+  if (hasFlutter) bumpFlutterPubspec(bumpType);
+  if (hasNode) bumpNodePackage(bumpType);
+  console.log("");
+}
+
+/**
+ * Fase 2: post-commit (Garantiza soporte para GUIs como VS Code, GitKraken, etc.)
+ */
+function handlePostCommit() {
+  if (process.env.AUTOVERSION_AMENDING === "1") return;
+
+  const hasNode = fs.existsSync(PKG_PATH);
+  const hasFlutter = fs.existsSync(PUBSPEC_PATH);
+  if (!hasNode && !hasFlutter) return;
+
+  // Inspeccionar archivos modificados en HEAD
+  let committedFiles = "";
+  try {
+    committedFiles = execSync("git diff-tree --no-commit-id --name-only -r --root HEAD", { encoding: "utf8" });
+  } catch {
+    return;
+  }
+
+  // Si el commit ya modificó la versión (por pre-commit o manualmente), no volver a tocar
+  const alreadyBumped = (hasFlutter && committedFiles.includes("pubspec.yaml")) ||
+                        (hasNode && committedFiles.includes("package.json"));
+  if (alreadyBumped) return;
+
+  // Extraer mensaje del commit recién creado
+  let lastMsg = "";
+  try {
+    lastMsg = execSync("git log -1 --pretty=%B", { encoding: "utf8" }).trim();
+  } catch {
+    return;
+  }
+
+  const bumpType = getBumpType(lastMsg);
+  if (!bumpType) return;
+
+  console.log(`\n🚀 [AutoVersion] Mensaje detectado (GUI / stdin): "${lastMsg.split("\n")[0]}"`);
+  let modified = false;
+  if (hasFlutter) modified = bumpFlutterPubspec(bumpType) || modified;
+  if (hasNode) modified = bumpNodePackage(bumpType) || modified;
+
+  if (modified) {
+    try {
+      execSync("git commit --amend --no-edit", {
+        env: { ...process.env, AUTOVERSION_AMENDING: "1" },
+        stdio: "pipe"
+      });
+      console.log("✓ [AutoVersion] Versión enmendada exitosamente en el commit.\n");
+    } catch (e) {
+      console.error("Error en post-commit amend:", e.message);
+    }
+  }
 }
 
 function main() {
   try {
-    const hasNode = fs.existsSync(PKG_PATH);
-    const hasFlutter = fs.existsSync(PUBSPEC_PATH);
-    if (!hasNode && !hasFlutter) return;
-
-    const cmdline = findGitCommitCmdline();
-    let msg = extractCommitMessage(cmdline);
-
-    msg = msg.trim();
-    if (!msg) return;
-
-    // Omitir commits automáticos de merge o revert
-    if (msg.startsWith('Merge ') || msg.startsWith('Revert ')) return;
-
-    // Mapeo de Conventional Commits a SemVer
-    let bumpType = null;
-    if (/^[a-z]+(\([^\)]+\))?!:/.test(msg) || /BREAKING CHANGE/i.test(msg)) {
-      bumpType = 'major';
-    } else if (/^feat(\([^\)]+\))?:/i.test(msg)) {
-      bumpType = 'minor';
-    } else if (/^(fix|style|perf|refactor)(\([^\)]+\))?:/i.test(msg)) {
-      bumpType = 'patch';
+    const isPostCommit = process.argv.includes("--post-commit");
+    if (isPostCommit) {
+      handlePostCommit();
+    } else {
+      handlePreCommit();
     }
-
-    if (!bumpType) return;
-
-    console.log(`\n🚀 [AutoVersion] Mensaje detectado: "${msg.split('\n')[0]}"`);
-
-    if (hasFlutter) bumpFlutterPubspec(bumpType);
-    if (hasNode) bumpNodePackage(bumpType);
-
-    console.log('');
   } catch (err) {
-    // Silencioso para no romper el flujo en caso inesperado
+    // Silencioso para no interferir con el flujo habitual de git
   }
 }
 
@@ -348,16 +425,20 @@ if [ "$HAS_PKG" = true ]; then
   '
 fi
 
-# 8. Ejecutar configuración inicial del hook
+# 8. Ejecutar configuración inicial de los hooks
 node scripts/setup-git-hooks.mjs
 
 echo -e "\n${GREEN}${BOLD}🎉 ¡Auto-versionamiento configurado con éxito!${NC}"
 if [ "$HAS_PUBSPEC" = true ]; then
-  echo -e "${CYAN}📱 Proyecto Flutter detectado: se actualizará 'pubspec.yaml' (SemVer + BuildNumber).${NC}"
+  echo -e "${CYAN}📱 Proyecto Flutter detectado: se actualizará 'pubspec.yaml' (SemVer + BuildNumber).\${NC}"
 fi
 if [ "$HAS_PKG" = true ]; then
-  echo -e "${CYAN}📦 Proyecto Node.js detectado: se actualizará 'package.json'.${NC}"
+  echo -e "${CYAN}📦 Proyecto Node.js detectado: se actualizará 'package.json'.\${NC}"
 fi
+
+echo -e "\n${BOLD}Compatibilidad total habilitada:${NC}"
+echo -e "  • Terminal CLI (git commit -m \"...\")"
+echo -e "  • VS Code / Cursor / GitKraken (Source Control UI)"
 
 echo -e "\n${BOLD}Reglas de incremento:${NC}"
 echo -e "  • ${BOLD}feat:...${NC}        → Minor (+0.1.0, build +1)"
