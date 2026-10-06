@@ -1,6 +1,6 @@
 {
   "name": "@edgar-bri/autoversion",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Auto-versionamiento sem\u00e1ntico por Conventional Commits para proyectos Node.js y Flutter / Dart",
   "type": "module",
   "bin": {

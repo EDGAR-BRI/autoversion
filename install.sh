@@ -2,9 +2,11 @@
 set -e
 
 # ==============================================================================
-# AutoVersion Setup Script v1.3.0
+# AutoVersion Setup Script v1.4.0
 # Soporte para Node.js (package.json) y Flutter / Dart (pubspec.yaml)
-# Configuración jerárquica (.autoversion.json global y local)
+# Configuración jerárquica (.autoversion.json con comentarios)
+# Modo estricto opcional ("strict": false/true)
+# Detección y bloqueo de fuga de secretos ("blockSecrets": true)
 # Generación atómica de CHANGELOG.md
 # Compatible con Terminal CLI y GUIs (VS Code, Cursor, GitKraken, etc.)
 # https://github.com/EDGAR-BRI/autoversion
@@ -99,19 +101,30 @@ fi
 # 4. Crear carpeta scripts/ si no existe
 mkdir -p scripts
 
-# 5. Generar .autoversion.json por defecto si no existe en el proyecto
+# 5. Generar .autoversion.json por defecto con comentarios explicativos
 if [ ! -f ".autoversion.json" ]; then
   cat << 'CONFIG_EOF' > .autoversion.json
 {
+  // Si es true, bloquea el commit si no sigue Conventional Commits (ej: "feat: ...", "fix: ...")
+  "strict": false,
+
+  // Si es true, bloquea el commit si detecta credenciales sensibles (Stripe, GitHub, RSA, AWS, Google)
+  "blockSecrets": true,
+
+  // Generación automática del archivo CHANGELOG.md en cada incremento de versión
   "changelog": true,
+
+  // Reglas de incremento personalizadas:
+  // Déjalas vacías [] para usar las reglas por defecto del sistema (feat -> minor, fix -> patch).
+  // Agrega prefijos adicionales aquí (ej: ["chore", "hotfix"]) para activarlos en este proyecto.
   "rules": {
-    "major": ["breaking"],
-    "minor": ["feat", "ui"],
-    "patch": ["fix", "style", "perf", "refactor", "chore", "hotfix"]
+    "major": [],
+    "minor": [],
+    "patch": []
   }
 }
 CONFIG_EOF
-  echo -e "${GREEN}✓ Archivo de configuración local .autoversion.json creado.${NC}"
+  echo -e "${GREEN}✓ Archivo de configuración .autoversion.json creado con comentarios explicativos.${NC}"
 fi
 
 # 6. Generar scripts/setup-git-hooks.mjs
@@ -146,6 +159,15 @@ elif [ -f "scripts/auto-version-hook.js" ]; then
 fi
 `;
 
+const commitMsgContent = `#!/usr/bin/env bash
+${nodeEnvLoader}
+if [ -f "scripts/auto-version-hook.mjs" ]; then
+  exec node scripts/auto-version-hook.mjs --commit-msg "$1"
+elif [ -f "scripts/auto-version-hook.js" ]; then
+  exec node scripts/auto-version-hook.js --commit-msg "$1"
+fi
+`;
+
 const postCommitContent = `#!/usr/bin/env bash
 ${nodeEnvLoader}
 if [ -f "scripts/auto-version-hook.mjs" ]; then
@@ -158,8 +180,9 @@ fi
 try {
   if (fs.existsSync(hooksDir)) {
     fs.writeFileSync(path.resolve(hooksDir, "pre-commit"), preCommitContent, { mode: 0o755 });
+    fs.writeFileSync(path.resolve(hooksDir, "commit-msg"), commitMsgContent, { mode: 0o755 });
     fs.writeFileSync(path.resolve(hooksDir, "post-commit"), postCommitContent, { mode: 0o755 });
-    console.log("✓ [AutoVersion] Hooks pre-commit y post-commit instalados en .git/hooks/");
+    console.log("✓ [AutoVersion] Hooks pre-commit, commit-msg y post-commit instalados en .git/hooks/");
   }
 } catch (e) {}
 SETUP_HOOK_EOF
@@ -174,20 +197,29 @@ const PKG_PATH = path.resolve("package.json");
 const PUBSPEC_PATH = path.resolve("pubspec.yaml");
 
 const DEFAULT_CONFIG = {
+  strict: false,
+  blockSecrets: true,
   changelog: true,
   changelogFile: "CHANGELOG.md",
   rules: {
     major: ["breaking"],
     minor: ["feat", "ui"],
-    patch: ["fix", "style", "perf", "refactor", "chore", "hotfix"]
+    patch: ["fix", "style", "perf", "refactor"]
   }
 };
 
 /**
- * Carga jerarquía de configuración:
- * 1. Defaults de la herramienta
- * 2. Sobrescrito por ~/.autoversion.json (global) si existe
- * 3. Sobrescrito por ./.autoversion.json (local del proyecto) si existe
+ * Limpia comentarios // y /* *\/ de JSON antes de parsear
+ */
+function stripJsonComments(str) {
+  return str.replace(/\"|"(?:\"|[^"])*"|(\/\/.*|\/\*[\s\S]*?\*\/)/g, (m, g) => (g ? "" : m));
+}
+
+/**
+ * Carga jerarquía de configuración con soporte para comentarios:
+ * 1. Defaults base
+ * 2. Sobrescrito por ~/.autoversion.json (global)
+ * 3. Sobrescrito por ./.autoversion.json (local)
  */
 function loadConfig() {
   const homeDir = process.env.HOME || process.env.USERPROFILE || "";
@@ -196,33 +228,71 @@ function loadConfig() {
 
   let config = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
 
+  function mergeIntoConfig(target, source) {
+    if (!source) return;
+    if (source.strict !== undefined) target.strict = Boolean(source.strict);
+    if (source.blockSecrets !== undefined) target.blockSecrets = Boolean(source.blockSecrets);
+    if (source.changelog !== undefined) target.changelog = Boolean(source.changelog);
+    if (source.changelogFile) target.changelogFile = source.changelogFile;
+
+    if (source.rules) {
+      if (Array.isArray(source.rules.major) && source.rules.major.length > 0) {
+        target.rules.major = [...new Set([...target.rules.major, ...source.rules.major])];
+      }
+      if (Array.isArray(source.rules.minor) && source.rules.minor.length > 0) {
+        target.rules.minor = [...new Set([...target.rules.minor, ...source.rules.minor])];
+      }
+      if (Array.isArray(source.rules.patch) && source.rules.patch.length > 0) {
+        target.rules.patch = [...new Set([...target.rules.patch, ...source.rules.patch])];
+      }
+    }
+  }
+
   if (homeDir && fs.existsSync(globalPath)) {
     try {
-      const g = JSON.parse(fs.readFileSync(globalPath, "utf8"));
-      if (g.changelog !== undefined) config.changelog = g.changelog;
-      if (g.changelogFile) config.changelogFile = g.changelogFile;
-      if (g.rules) {
-        if (g.rules.major) config.rules.major = g.rules.major;
-        if (g.rules.minor) config.rules.minor = g.rules.minor;
-        if (g.rules.patch) config.rules.patch = g.rules.patch;
-      }
+      const raw = fs.readFileSync(globalPath, "utf8");
+      const g = JSON.parse(stripJsonComments(raw));
+      mergeIntoConfig(config, g);
     } catch {}
   }
 
   if (fs.existsSync(localPath)) {
     try {
-      const l = JSON.parse(fs.readFileSync(localPath, "utf8"));
-      if (l.changelog !== undefined) config.changelog = l.changelog;
-      if (l.changelogFile) config.changelogFile = l.changelogFile;
-      if (l.rules) {
-        if (l.rules.major) config.rules.major = l.rules.major;
-        if (l.rules.minor) config.rules.minor = l.rules.minor;
-        if (l.rules.patch) config.rules.patch = l.rules.patch;
-      }
+      const raw = fs.readFileSync(localPath, "utf8");
+      const l = JSON.parse(stripJsonComments(raw));
+      mergeIntoConfig(config, l);
     } catch {}
   }
 
   return config;
+}
+
+/**
+ * Bloquea commit si detecta secretos en staging
+ */
+function checkSecretLeaks() {
+  try {
+    const diff = execSync("git diff --cached", { encoding: "utf8" });
+    if (!diff) return false;
+
+    const patterns = [
+      { name: "Clave Privada RSA / OpenSSH", regex: /BEGIN (?:RSA|DSA|EC|OPENSSH|PGP) PRIVATE KEY/ },
+      { name: "Token Secreto de Stripe", regex: /sk_live_[0-9a-zA-Z]{20,}/ },
+      { name: "Token Personal de GitHub", regex: /(?:ghp_[0-9a-zA-Z]{36}|github_pat_[0-9a-zA-Z_]{82})/ },
+      { name: "Access Key de AWS", regex: /AKIA[0-9A-Z]{16}/ },
+      { name: "API Key de Google", regex: /AIza[0-9A-Za-z\-_]{35}/ }
+    ];
+
+    for (const p of patterns) {
+      if (p.regex.test(diff)) {
+        console.error(`\n❌ [ERROR DE SEGURIDAD] Se detectó una credencial sensible en staging: ${p.name}`);
+        console.error(`🚫 Commit cancelado automáticamente para evitar fuga de secretos.`);
+        console.error(`ℹ️  Revisa tus archivos staged antes de confirmar el commit.\n`);
+        return true;
+      }
+    }
+  } catch {}
+  return false;
 }
 
 function findGitCommitCmdline() {
@@ -430,8 +500,17 @@ function updateChangelog(newVersion, msg, bumpType, config) {
   }
 }
 
+/**
+ * Fase 1: pre-commit (Intercepción CLI y bloqueo de secretos)
+ */
 function handlePreCommit() {
   const config = loadConfig();
+
+  // Escaneo y bloqueo de credenciales sensibles
+  if (config.blockSecrets && checkSecretLeaks()) {
+    process.exit(1);
+  }
+
   const cmdline = findGitCommitCmdline();
   const msg = extractCommitMessage(cmdline);
   const bumpType = getBumpType(msg, config);
@@ -476,6 +555,38 @@ function handlePreCommit() {
   console.log("");
 }
 
+/**
+ * Fase commit-msg: Modo estricto para validar Conventional Commits
+ */
+function handleCommitMsg(msgFile) {
+  const config = loadConfig();
+  if (!config.strict) return;
+
+  if (!msgFile || !fs.existsSync(msgFile)) return;
+  const content = fs.readFileSync(msgFile, "utf8").trim();
+  const firstLine = content.split("\n")[0].trim();
+
+  // Ignorar commits automáticos de Git como Merge o Revert
+  if (firstLine.startsWith("Merge ") || firstLine.startsWith("Revert ")) return;
+
+  // Formato Conventional Commits: tipo(alcance)?: descripcion o tipo(alcance)!: descripcion
+  const isValid = /^[a-z]+(\([^\)]+\))?!?: .+/i.test(firstLine);
+
+  if (!isValid) {
+    console.error(`\n❌ [ERROR STRICT COMMIT] El mensaje no cumple con el estándar Conventional Commits.`);
+    console.error(`   Mensaje recibido: "${firstLine}"`);
+    console.error(`\nℹ️  Estructura obligatoria: <tipo>: <descripción>`);
+    console.error(`   Ejemplos válidos:`);
+    console.error(`   • feat: nueva pantalla de perfil`);
+    console.error(`   • fix: corrección de error en formulario`);
+    console.error(`   • chore: mantenimiento de dependencias\n`);
+    process.exit(1);
+  }
+}
+
+/**
+ * Fase 2: post-commit (Soporte GUIs y actualización atómica)
+ */
 function handlePostCommit() {
   if (process.env.AUTOVERSION_AMENDING === "1") return;
 
@@ -535,8 +646,10 @@ function handlePostCommit() {
 
 function main() {
   try {
-    const isPostCommit = process.argv.includes("--post-commit");
-    if (isPostCommit) {
+    if (process.argv.includes("--commit-msg")) {
+      const idx = process.argv.indexOf("--commit-msg");
+      handleCommitMsg(process.argv[idx + 1]);
+    } else if (process.argv.includes("--post-commit")) {
       handlePostCommit();
     } else {
       handlePreCommit();
@@ -582,6 +695,8 @@ if [ "$HAS_PKG" = true ]; then
 fi
 
 echo -e "\n${BOLD}Funcionalidades activadas:${NC}"
-echo -e "  • ⚙️  Reglas configurables en .autoversion.json (global en ~/.autoversion.json)"
+echo -e "  • ⚙️  .autoversion.json con comentarios y reglas personalizables"
+echo -e "  • 🔒 Detección y bloqueo automático de fuga de secretos (blockSecrets)"
+echo -e "  • 🚦 Modo estricto configurable (strict: false/true)"
 echo -e "  • 📋 Generación automática y atómica de CHANGELOG.md"
 echo -e "  • 🖥️  Compatibilidad total: Terminal CLI y VS Code / GUIs\n"
