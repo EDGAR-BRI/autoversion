@@ -366,7 +366,19 @@ function handlePostCommit() {
   }
 
   const bumpType = getBumpType(lastMsg);
-  if (!bumpType) return;
+  if (!bumpType) {
+    const firstLine = lastMsg.split("\n")[0].trim();
+    const ignored = firstLine.match(/^(chore|docs|test|ci|build)(\\([^\\)]+\\))?:/i);
+    if (ignored) {
+      console.log(`\nℹ️ [AutoVersion] Mensaje detectado: "${firstLine}"`);
+      console.log(`ℹ️ [AutoVersion] El tipo "${ignored[1]}" es para mantenimiento interno y NO incrementa versión según SemVer.`);
+      console.log(`ℹ️ [AutoVersion] Para incrementar versión, usa "fix:" (PATCH) o "feat:" (MINOR).\n`);
+      try {
+        fs.appendFileSync("/tmp/autoversion.log", `[${new Date().toISOString()}] Tipo "${ignored[1]}" ignorado: "${firstLine}"\n`);
+      } catch {}
+    }
+    return;
+  }
 
   console.log(`\n🚀 [AutoVersion] Mensaje detectado (GUI / stdin): "${lastMsg.split("\n")[0]}"`);
   let modified = false;
